@@ -1,0 +1,164 @@
+#Creamos la red de las máquinas
+
+docker network create network-edge-gria
+
+#Creamos las 3 máquinas y a cada una de ellas le levantamos un proceso de mongo
+
+#Máquina 1
+docker run --name maquina1 -dti -v c:\temp:/home/alumnobd/host-temp --network network-edge-gria mongo:latest bash
+docker exec -it maquina1 bash
+
+#Máquina 2
+
+docker run --name maquina2 -dti -v c:\temp:/home/alumnobd/host-temp --network network-edge-gria mongo:latest bash
+docker exec -it maquina2 bash
+
+#Máquina 3
+
+docker run --name maquina3 -dti -v c:\temp:/home/alumnobd/host-temp --network network-edge-gria mongo:latest bash
+docker exec -it maquina3 bash
+
+#Ahora vamos a crear el proceso del Config Server (ejecutamos estes comandos en las 3 máquinas)
+
+mkdir -p /home/alumnobd/servconf
+nohup mongod --configsvr --replSet rsCS --port 27017 --bind_ip_all --dbpath /home/alumnobd/servconf --wiredTigerCacheSizeGB 0.25 > /dev/null 2>&1 &
+mongosh --port 27017
+
+#Inicializamos el Server Config (solo hace falta hacerlo en una máquina dentro de mongo)
+
+rs.initiate({
+  _id: "rsCS",
+  configsvr: true,
+  members: [
+    { _id: 0, host: "maquina1:27017" },
+    { _id: 1, host: "maquina2:27017" },
+    { _id: 2, host: "maquina3:27017" }
+  ]
+})
+
+#Inicializamos ahora el proceso mongos en el puerto 27018 (ejecutar comando en las 3 máquinas)
+#No creamos una carpeta porque el proceso mongo no almacena datos
+
+nohup mongos --port 27018 --configdb rsCS/maquina1:27017,maquina2:27017,maquina3:27017 --bind_ip_all > /dev/null &
+
+#Es turno de crear los 3 shards en los que particionaremos los datos
+#Primero se crearán como los replicasets anteriores, pero después los convertiremos a shards
+
+#Ejecutamos estes comandos en las 3 máquinas
+
+mkdir -p /home/alumnobd/shard1
+nohup mongod --shardsvr --replSet rsSH1 --port 27019 --dbpath /home/alumnobd/shard1 --bind_ip_all --wiredTigerCacheSizeGB 0.25 > /dev/null &
+
+mkdir -p /home/alumnobd/shard2
+nohup mongod --shardsvr --replSet rsSH2 --port 27020 --dbpath /home/alumnobd/shard2 --bind_ip_all --wiredTigerCacheSizeGB 0.25 > /dev/null &
+
+mkdir -p /home/alumnobd/shard3
+nohup mongod --shardsvr --replSet rsSH3 --port 27021 --dbpath /home/alumnobd/shard3 --bind_ip_all --wiredTigerCacheSizeGB 0.25 > /dev/null &
+
+
+#Inicializamos los shards desde una de las máquinas
+
+#accedemos al puerto de cada uno de los shards
+mongosh --port 27019 
+
+rs.initiate({
+  _id: "rsSH1",
+  members: [
+    { _id: 0, host: "maquina1:27019" },
+    { _id: 1, host: "maquina2:27019" },
+    { _id: 2, host: "maquina3:27019" }
+  ]
+})
+
+mongosh --port 27020
+
+rs.initiate({
+  _id: "rsSH2",
+  members: [
+    { _id: 0, host: "maquina1:27020" },
+    { _id: 1, host: "maquina2:27020" },
+    { _id: 2, host: "maquina3:27020" }
+  ]
+})
+
+mongosh --port 27021
+
+rs.initiate({
+  _id: "rsSH3",
+  members: [
+    { _id: 0, host: "maquina1:27021" },
+    { _id: 1, host: "maquina2:27021" },
+    { _id: 2, host: "maquina3:27021" }
+  ]
+})
+
+#Ahora convertimos los replicasets en shards de nuestro cluster
+
+mongosh --port 27018
+
+sh.addShard("rsSH1/maquina1:27019,maquina2:27019,maquina3:27019")
+sh.addShard("rsSH2/maquina1:27020,maquina2:27020,maquina3:27020")
+sh.addShard("rsSH3/maquina1:27021,maquina2:27021,maquina3:27021")
+
+#Comprobamos que se hayan creado correctamente
+
+sh.status()
+
+
+#IMPORTACIÓN Y PARTICIONAMIENTO DE LOS DATOS
+
+#Primero tenemos que exportar nuestro esquema de datos JSON de nuestra base de datos
+
+docker exec -it edge-gria-pgsql bash
+
+psql -h 127.0.0.1 -d postgres -U alumnobd -W #poner el nombre de la base de datos en la que creamos el modelo json
+
+#Contraseña: pwalumnobd
+
+\copy (
+    SELECT jsonb_build_object(
+        'dni_cliente', dni_cliente,
+        'nombre', nombre,
+        'direccion_actual', direccion_actual,
+        'historial_reservas', historial_reservas,
+        'mis_reseñas', mis_reseñas
+    )
+    FROM modelo_json.documentos_cliente
+) TO '/home/alumnobd/host-temp/clientes_para_mongo.json'
+
+#entramos en una de nuestras máquinas
+
+docker exec maquina1 bash
+
+#Ahora importamos los datos en una de nuestras máquinas (da igual cual)
+
+
+#Importamos datos con limitación de recursos para no saturar la RAM del ordenador
+mongoimport --host 127.0.0.1 --port 27018 \
+  --db hoteles_db \
+  --collection clientes \
+  --numInsertionWorkers 1 \
+  --batchSize 100 \
+  --file /home/alumnobd/host-temp/clientes_para_mongo.json
+
+
+mongosh --port 27018
+
+use hoteles_db
+
+#Comprobamos que los datos se importaron correctamente
+
+db.clientes.countDocuments()
+
+#Activamos el particionamiento de los datos
+
+sh.enableSharding("hoteles_db") 
+
+#particionamos los datos
+
+db.clientes.createIndex({ dni_cliente: "hashed" })
+sh.shardCollection("hoteles_db.clientes", { dni_cliente: "hashed" })
+
+#Vemos la distribución de los shards
+
+db.clientes.getShardDistribution()

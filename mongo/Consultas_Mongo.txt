@@ -1,0 +1,410 @@
+#CONSULTA 1
+
+db.clientes.aggregate([
+    {
+        $unwind: "$historial_reservas"
+    },
+    
+    {
+        $unwind: "$historial_reservas.hotel_reservado_info_completa.habitaciones"
+    },
+    
+    {
+        $match: {
+            "historial_reservas.hotel_reservado_info_completa.id_hotel": 1,
+            "historial_reservas.hotel_reservado_info_completa.habitaciones.piso": 5,
+            
+            $expr: {
+                $and: [
+                    { $eq: [ 
+                        "$historial_reservas.num_habitacion_reservada", 
+                        "$historial_reservas.hotel_reservado_info_completa.habitaciones.numero" 
+                    ]},
+                    
+                    { $eq: [ 
+                        { $year: { $toDate: "$historial_reservas.fecha_entrada" } }, 
+                        2025 
+                    ]}
+                ]
+            }
+        }
+    },
+    
+    {
+        $project: {
+            _id: 0,
+            nombre: "$nombre",
+            dni: "$dni_cliente",
+            num_habitacion: "$historial_reservas.hotel_reservado_info_completa.habitaciones.numero",
+            dias_alojamiento: "$historial_reservas.duracion"
+        }
+    }
+])
+
+
+#CONSULTA 2
+
+db.clientes.aggregate([
+    {
+        $facet: {
+            // --- "ingresos_anuales" ---
+            "ingresos_anuales": [
+                { $unwind: "$historial_reservas" },
+                { $unwind: "$historial_reservas.hotel_reservado_info_completa.habitaciones" },
+                { $match: {
+                    "historial_reservas.hotel_reservado_info_completa.id_hotel": 2,
+                    $expr: { $eq: [ 
+                        "$historial_reservas.num_habitacion_reservada", 
+                        "$historial_reservas.hotel_reservado_info_completa.habitaciones.numero" 
+                    ]}
+                }},
+                { $group: {
+                    _id: { $year: { $toDate: "$historial_reservas.fecha_entrada" } },
+                    ingresos: { $sum: { $multiply: [
+                        "$historial_reservas.duracion",
+                        "$historial_reservas.hotel_reservado_info_completa.habitaciones.precio_noche"
+                    ]}}
+                }},
+                { $project: { _id: 0, ano: "$_id", ingresos: "$ingresos" }}
+            ],
+
+            // --- "Censo_empleados" ---
+            "censo_empregados": [
+                { $unwind: "$historial_reservas" },
+                { $match: { "historial_reservas.hotel_reservado_info_completa.id_hotel": 2 }},
+                { $unwind: "$historial_reservas.hotel_reservado_info_completa.plantilla" },
+                { $group: {
+                    _id: "$historial_reservas.hotel_reservado_info_completa.plantilla.dni",
+                    sueldo_anual: { $first: { $multiply: [ "$historial_reservas.hotel_reservado_info_completa.plantilla.sueldo", 12 ] } },
+                    ano_contratado: { $first: { $year: { $toDate: "$historial_reservas.hotel_reservado_info_completa.plantilla.fecha_incorporacion" } } }
+                }}
+            ]
+        }
+    },
+    
+    {
+        $unwind: "$ingresos_anuales"
+    },
+    
+    {
+        $project: {
+            _id: 0,
+            ano: "$ingresos_anuales.ano",
+            ingresos: "$ingresos_anuales.ingresos",
+            total_gastado: {
+                $sum: {
+                    $map: {
+                        input: {
+                            $filter: { // Filtramos la lista de empleados
+                                input: "$censo_empregados",
+                                as: "emp",
+                                // Condición: año de contratación <= año actual
+                                cond: { $lte: [ "$$emp.ano_contratado", "$ingresos_anuales.ano" ] }
+                            }
+                        },
+                        as: "emp_contratado",
+                        in: "$$emp_contratado.sueldo_anual" // Sumamos sueldos
+                    }
+                }
+            }
+        }
+    },
+    {
+        $sort: { ano: -1 }
+    },
+    {
+        $limit: 15
+    }
+])
+
+
+#CONSULTA 3
+
+// Executa esto en el mongosh:
+db.clientes.createIndex(
+   { "mis_reseñas.texto": "text" }, // Indexa el campo 'texto' dentro del array 'mis_reseñas'
+   { "default_language": "english" } // Usa las reglas del inglés (como "babies" -> "baby")
+)
+
+db.clientes.aggregate([
+    // Encuentra solo los clientes que tengan la palabra "baby" en algunha reseña
+    {
+        $match: {
+            $text: { $search: "baby" }
+        }
+    },
+    {
+        $unwind: "$mis_reseñas"
+    },
+    
+    // Nos quedamos con las filas que contienen "baby"
+    {
+        $match: {
+           // Usamos regex para imitar o ILIKE/tsquery. /i = non sensible a maiúsculas
+           "mis_reseñas.texto": { $regex: /baby/i }
+        }
+    },
+    {
+        $sort: {
+            "mis_reseñas.valoracion": -1
+        }
+    },
+    {
+        $project: {
+            _id: 0,
+            nombre: "$nombre",
+            valoracion: "$mis_reseñas.valoracion",
+            descripcion: "$mis_reseñas.texto"
+        }
+    }
+])
+
+
+#CONSULTA 4
+
+db.clientes.aggregate([
+    {
+        $facet: {
+            // --- Clientes con > 5 reservas
+            "por_reservas": [
+                { $unwind: "$historial_reservas" },
+                { $group: {
+                    _id: {
+                        hotel: "$historial_reservas.hotel_reservado_info_completa.nombre",
+                        cliente: "$nombre",
+                        dni_cliente: "$dni_cliente"
+                    },
+                    count: { $sum: 1 }
+                }},
+                { $match: { count: { $gt: 5 } } },
+                { $project: {
+                    _id: 0,
+                    hotel: "$_id.hotel",
+                    cliente: "$_id.cliente",
+                    dni_cliente: "$_id.dni_cliente"
+                }}
+            ],
+            
+            "por_reseñas": [
+                { $unwind: "$mis_reseñas" },
+                { $group: {
+                    _id: {
+                        hotel: "$mis_reseñas.hotel_nombre",
+                        cliente: "$nombre",
+                        dni_cliente: "$dni_cliente"
+                    },
+                    count: { $sum: 1 }
+                }},
+                { $match: { count: { $gt: 5 } } },
+                { $project: {
+                    _id: 0,
+                    hotel: "$_id.hotel",
+                    cliente: "$_id.cliente",
+                    dni_cliente: "$_id.dni_cliente"
+                }}
+            ]
+        }
+    },
+    
+    // --- Combinar los resultados ---
+    {
+        $project: {
+            resultados: { $concatArrays: [ "$por_reservas", "$por_reseñas" ] }
+        }
+    },
+    {
+        $unwind: "$resultados"
+    },
+    {
+        $replaceRoot: { newRoot: "$resultados" }
+    },
+    {
+        $group: {
+            _id: {
+                hotel: "$hotel",
+                cliente: "$cliente",
+                dni_cliente: "$dni_cliente"
+            }
+        }
+    },
+    {
+        $project: {
+            _id: 0,
+            hotel: "$_id.hotel",
+            cliente: "$_id.cliente",
+            dni_cliente: "$_id.dni_cliente"
+        }
+    }
+])
+
+
+#CONSULTA 6
+
+
+// Crea la vista (el "censo_empregados" de SQL)
+db.createView("vista_censo_empleados", "clientes", [
+    // 1. Desempaqueta todo
+    { $unwind: "$historial_reservas" },
+    { $unwind: "$historial_reservas.hotel_reservado_info_completa.plantilla" },
+    
+    // 2. Hace DISTINCT por DNI de empleado
+    { $group: { 
+        _id: "$historial_reservas.hotel_reservado_info_completa.plantilla.dni",
+        cargo: { $first: "$historial_reservas.hotel_reservado_info_completa.plantilla.cargo" },
+        dni_director: { $first: "$historial_reservas.hotel_reservado_info_completa.plantilla.dni_director" }
+    }},
+    { $project: {
+        _id: 0, 
+        dni_empleado: "$_id", 
+        cargo_empleado: "$cargo", 
+        dni_jefe: "$dni_director" 
+    }}
+])
+
+db.vista_censo_empleados.aggregate([
+    { $lookup: {
+        from: "vista_censo_empleados",    
+        localField: "dni_empleado",  
+        foreignField: "dni_jefe",   
+        as: "subordinados"
+    }},
+    
+    { $match: {
+        "subordinados": { $size: 0 } 
+    }},
+    
+    { $lookup: {
+        from: "vista_censo_empleados",
+        localField: "dni_jefe",
+        foreignField: "dni_empleado",
+        as: "xefe_info"
+    }},
+    
+    { $unwind: { path: "$xefe_info", preserveNullAndEmptyArrays: true } },
+    
+    { $project: {
+        _id: 0,
+        empleado: "$dni_empleado",
+        cargo_empleado: "$cargo_empleado",
+        dni_jefe: "$dni_jefe",
+        cargo_jefe: "$xefe_info.cargo_empleado"
+    }},
+    
+    { $sort: { empleado: 1 } }
+])
+
+
+#CONSULTA 7
+
+db.clientes.aggregate([
+    {
+        $unwind: "$historial_reservas"
+    },
+    
+    {
+        $unwind: "$historial_reservas.hotel_reservado_info_completa.puntos_interes_cercanos"
+    },
+    
+    {
+        $match: {
+            "historial_reservas.hotel_reservado_info_completa.id_hotel": 1,
+            
+            // punto_interes ->> 'tipo_servicio' = 'restaurant'
+            "historial_reservas.hotel_reservado_info_completa.puntos_interes_cercanos.tipo_servizo": "restaurant",
+            
+            // punto_interes ->> 'cocina' = 'regional'
+            "historial_reservas.hotel_reservado_info_completa.puntos_interes_cercanos.cociña": "regional"
+        }
+    },
+    
+    // --- 4. Aplicamos el "DISTINCT" ---
+    {
+        $group: {
+            _id: { // Agrupamos por todos os campos para obter valores únicos
+                name: "$historial_reservas.hotel_reservado_info_completa.puntos_interes_cercanos.nome",
+                opening_hours: "$historial_reservas.hotel_reservado_info_completa.puntos_interes_cercanos.horario",
+                distancia_en_metros: "$historial_reservas.hotel_reservado_info_completa.puntos_interes_cercanos.distancia_aprox_metros",
+                geom: "$historial_reservas.hotel_reservado_info_completa.puntos_interes_cercanos.localizacion_punto"
+            }
+        }
+    },
+    {
+        $sort: {
+            "_id.distancia_en_metros": 1 // 1 = ascendente (ASC)
+        }
+    },
+    
+    {
+        $project: {
+            _id: 0,
+            name: "$_id.name",
+            opening_hours: "$_id.opening_hours",
+            distancia_en_metros: "$_id.distancia_en_metros",
+            geom: "$_id.geom"
+        }
+    }
+])
+
+
+#CONSULTA 8
+
+db.clientes.aggregate([
+    {
+        $unwind: "$historial_reservas"
+    },
+    {
+        $unwind: "$historial_reservas.hotel_reservado_info_completa.puntos_interes_cercanos"
+    },
+    {
+        $match: {
+            // hotel 'Hostal dos Reis Católicos'
+            "historial_reservas.hotel_reservado_info_completa.nombre": "Hostal dos Reis Católicos",
+            "historial_reservas.hotel_reservado_info_completa.puntos_interes_cercanos.tipo_servizo": {
+                $in: ["atm", "pharmacy"]
+            },
+            
+            "historial_reservas.hotel_reservado_info_completa.puntos_interes_cercanos.distancia_aprox_metros": {
+                $lte: 500
+            }
+        }
+    },
+    {
+        $group: {
+            _id: { // Agrupamos por todos os campos para obter valores únicos
+                punto_interes: "$historial_reservas.hotel_reservado_info_completa.puntos_interes_cercanos.nome",
+                tipo_servicio: "$historial_reservas.hotel_reservado_info_completa.puntos_interes_cercanos.tipo_servizo",
+                hotel_geom: "$historial_reservas.hotel_reservado_info_completa.localizacion_hotel",
+                punto_geom: "$historial_reservas.hotel_reservado_info_completa.puntos_interes_cercanos.localizacion_punto"
+            }
+        }
+    },
+    {
+        $project: {
+            _id: 0,
+            punto_interes: "$_id.punto_interes",
+            tipo_servicio: "$_id.tipo_servicio",
+            
+            area_hotel: {
+                "type": "Point",
+                "coordinates": "$_id.hotel_geom.coordinates"
+            },
+            geometria_punto_interes: {
+                "type": "Point",
+                "coordinates": "$_id.punto_geom.coordinates"
+            }
+        }
+    }
+])
+
+
+
+
+
+
+
+
+
+
+
+
+

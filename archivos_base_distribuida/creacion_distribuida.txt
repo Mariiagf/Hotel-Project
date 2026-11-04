@@ -1,0 +1,21 @@
+
+Creación de la base de datos distribuída
+(Los comandos están pensados para su ejecución en linux o mac)
+
+
+1. Crear clúster:
+docker buildx build --platform=linux/amd64 -t citus-server:edge-gria . 
+docker network create network-hoteles 
+
+
+2. Crear coordinador (puerto: 35432) igual que en la práctica de clase con el Dockerfile del campus virtual: 
+docker run --name=hoteles-coordinator -dti -p 35432:5432 --platform=linux/amd64 -v .:/home/alumnobd/host-temp --network network-hoteles citus-server:edge-gria
+
+3. Crear workers:
+docker run --name=hoteles-worker1 -dti --platform=linux/amd64 --network network-hoteles citus-server:edge-gria
+docker run --name=hoteles-worker2 -dti --platform=linux/amd64 --network network-hoteles citus-server:edge-gria
+
+Gestión del clúster:
+Con hoteles_distribuida.sql y el import_distrubuida.sh se crea la srquitectura Citus, el esquema relacional y se cargan los archivos CSV.
+
+Para para un worker y ver lo que ocurría (worker 1): docker stop hoteles-worker1

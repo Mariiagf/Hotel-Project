@@ -1,0 +1,123 @@
+----PERSONAS----
+WITH "jdbc:postgresql://edge-gria-pgsql/proyectohotel?user=alumnobd&password=pwalumnobd" AS url
+CALL apoc.load.jdbc(url,
+ "SELECT dni, nombre, provincia, localidad, calle, numero, codigo_postal
+  FROM hoteles.personas") YIELD row
+MERGE (p:Persona {dni:row.dni})
+SET p.nombre = row.nombre,
+    p.provincia = row.provincia,
+    p.localidad = row.localidad,
+    p.calle = row.calle,
+    p.numero = row.numero,
+    p.codigo_postal = row.codigo_postal;
+
+
+----HOTELES----
+WITH "jdbc:postgresql://edge-gria-pgsql/proyectohotel?user=alumnobd&password=pwalumnobd" AS url
+CALL apoc.load.jdbc(url,
+ "SELECT id, nombre, fecha_inauguracion,
+         ST_X(ST_Centroid(localizacion)) AS lon,
+         ST_Y(ST_Centroid(localizacion)) AS lat
+  FROM hoteles.hoteles
+  WHERE localizacion IS NOT NULL") YIELD row
+MERGE (h:Hotel {id_hotel: row.id})
+SET h.nombre = row.nombre,
+    h.fecha_inauguracion = row.fecha_inauguracion,
+    h.localizacion = point({x: toFloat(row.lon), y: toFloat(row.lat)});
+
+----CLIENTES Y RELACION CON PERSONAS----
+WITH "jdbc:postgresql://edge-gria-pgsql/proyectohotel?user=alumnobd&password=pwalumnobd" AS url
+CALL apoc.load.jdbc(url,
+ "SELECT dni_cliente, id_cliente
+  FROM hoteles.clientes") YIELD row
+MERGE (c:Cliente {dni_cliente:row.dni_cliente})
+SET c.id_cliente = row.id_cliente
+WITH row, c
+MATCH (p:Persona {dni:row.dni_cliente})
+CREATE (c)-[:ES]->(p);
+
+
+----EMPLEADOS Y RELACION CON PERSONA----
+WITH "jdbc:postgresql://edge-gria-pgsql/proyectohotel?user=alumnobd&password=pwalumnobd" AS url
+CALL apoc.load.jdbc(url, "SELECT dni_empleado, hotel, id_empleado, cargo, sueldo, fecha_incorporacion, dni_director
+  FROM hoteles.empleado") YIELD row
+MERGE (e:Empleado {dni_empleado:row.dni_empleado})
+SET e.id_empleado = toInteger(row.id_empleado),
+    e.cargo = row.cargo,
+    e.sueldo = toFloat(row.sueldo),
+    e.fecha_incorporacion = row.fecha_incorporacion,
+    e.hotel = toInteger(row.hotel),
+    e.dni_director = row.dni_director
+WITH row, e
+MATCH (p:Persona {dni:row.dni_empleado})
+MERGE (e)-[:ES]->(p);
+
+----DIRIGIDO_POR----
+MATCH (e:Empleado)
+WHERE e.dni_director IS NOT NULL
+MATCH (j:Empleado {dni_empleado:e.dni_director})
+MERGE (e)-[:DIRIGIDO_POR]->(j);
+
+----HABITACIÓN Y RELACION CON HOTEL----
+WITH "jdbc:postgresql://edge-gria-pgsql/proyectohotel?user=alumnobd&password=pwalumnobd" AS url
+CALL apoc.load.jdbc(url,
+ "SELECT hotel, numero, piso, tipo, capacidad, precio_noche
+  FROM hoteles.habitaciones") YIELD row
+MATCH (h:Hotel {id_hotel:toInteger(row.hotel)})
+MERGE (hab:Habitacion {hotel_id:toInteger(row.hotel), numero:toInteger(row.numero)})
+SET hab.piso = toInteger(row.piso),
+    hab.tipo = row.tipo,
+    hab.capacidad = toInteger(row.capacidad),
+    hab.precio_noche = toFloat(row.precio_noche)
+MERGE (hab)-[:PERTENECE_A]->(h);
+
+----RESERVAS Y RELACION CON CLIENTE + HABITACION----
+WITH "jdbc:postgresql://edge-gria-pgsql/proyectohotel?user=alumnobd&password=pwalumnobd" AS url
+CALL apoc.load.jdbc(url,
+ "SELECT num_reserva, habitacion, hotel, fecha_entrada, duracion, cliente
+  FROM hoteles.reservas") YIELD row
+MERGE (r:Reserva {num_reserva:toInteger(row.num_reserva)})
+SET r.fecha_entrada = row.fecha_entrada,
+    r.duracion = toInteger(row.duracion)
+WITH row, r
+MATCH (c:Cliente {dni_cliente:row.cliente})
+MERGE (r)-[:RESERVA_DE]->(c)
+WITH row, r
+MATCH (hab:Habitacion {hotel_id:toInteger(row.hotel), numero:toInteger(row.habitacion)})
+MERGE (r)-[:PARA_HABITACION]->(hab);
+
+----RESEÑAS Y REALCIONES CON CLIENTE+HOTEL----
+WITH "jdbc:postgresql://edge-gria-pgsql/proyectohotel?user=alumnobd&password=pwalumnobd" AS url
+CALL apoc.load.jdbc(url,
+ "SELECT hotel, cliente, id_resena, descripcion, valoracion
+  FROM hoteles.resennas") YIELD row
+MERGE (res:Resena {id_resena:toInteger(row.id_resena), cliente:row.cliente, hotel:toInteger(row.hotel)})
+SET res.descripcion = row.descripcion,
+    res.valoracion = toInteger(row.valoracion)
+WITH row, res
+MATCH (c:Cliente {dni_cliente:row.cliente})
+MERGE (res)-[:REALIZADA_POR]->(c)
+WITH row, res
+MATCH (h:Hotel {id_hotel:toInteger(row.hotel)})
+MERGE (res)-[:RESEÑA_DE]->(h);
+
+----PUNTOS DE INTERES----
+WITH "jdbc:postgresql://edge-gria-pgsql/proyectohotel?user=alumnobd&password=pwalumnobd&options=-c%20search_path%3Dpublic,postgis" AS url
+CALL apoc.load.jdbc(url,
+ "SELECT id,
+         -- Aplicar ST_Transform para convertir coordenadas UTM a WGS84 (Lat/Lon)
+         ST_X(ST_Centroid(ST_Transform(geom, 4326))) AS lon,
+         ST_Y(ST_Centroid(ST_Transform(geom, 4326))) AS lat,
+         amenity, name, opening_hours, cuisine, phone
+  FROM hoteles.puntos_interes_def"
+) YIELD row
+WITH row WHERE row.id IS NOT NULL AND trim(row.id) <> ''
+MERGE (pi:PuntoInteres {id_punto: row.id})
+SET pi.geom = point({longitude: toFloat(row.lon), latitude: toFloat(row.lat)}),
+    pi.amenity = row.amenity,
+    pi.nombre = row.name,
+    pi.opening_hours = row.opening_hours,
+    pi.cuisine = row.cuisine,
+    pi.phone = row.phone;
+
+

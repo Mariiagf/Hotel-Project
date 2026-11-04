@@ -1,0 +1,9 @@
+PGPASSWORD=pwalumnobd psql -h localhost -p 25432 -U alumnobd -d alumnobd -f hotelesSchema.sql
+PGPASSWORD=pwalumnobd psql -h localhost -p 25432 -U alumnobd -d alumnobd -c "\copy hoteles.hoteles from hoteles.csv WITH (FORMAT csv, HEADER true, DELIMITER ',')"
+PGPASSWORD=pwalumnobd psql -h localhost -p 25432 -U alumnobd -d alumnobd -c "\copy hoteles.personas from personas.csv WITH (FORMAT csv, HEADER true, DELIMITER ',')"
+PGPASSWORD=pwalumnobd psql -h localhost -p 25432 -U alumnobd -d alumnobd -c "\copy hoteles.clientes from clientes.csv WITH (FORMAT csv, HEADER true, DELIMITER ',')"
+PGPASSWORD=pwalumnobd psql -h localhost -p 25432 -U alumnobd -d alumnobd -c "\copy hoteles.empleados from empleados.csv WITH (FORMAT csv, HEADER true, DELIMITER ',')"
+PGPASSWORD=pwalumnobd psql -h localhost -p 25432 -U alumnobd -d alumnobd -c "\copy hoteles.habitaciones from habitaciones.csv WITH (FORMAT csv, HEADER true, DELIMITER ',')"
+PGPASSWORD=pwalumnobd psql -h localhost -p 25432 -U alumnobd -d alumnobd -c "\copy hoteles.puntos_interes from puntos_interes.csv WITH (FORMAT csv, HEADER true, DELIMITER ',')"
+PGPASSWORD=pwalumnobd psql -h localhost -p 25432 -U alumnobd -d alumnobd -c "\copy hoteles.resenas from resenas.csv WITH (FORMAT csv, HEADER true, DELIMITER ',')"
+PGPASSWORD=pwalumnobd psql -h localhost -p 25432 -U alumnobd -d alumnobd -c "\copy hoteles.reservas from reservas.csv WITH (FORMAT csv, HEADER true, DELIMITER ',')"
