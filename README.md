@@ -60,7 +60,7 @@ This is a database-focused project that studies how different database models ca
 
 ## Location
 
-**Santiago de Compostela, Spain**
+**Santiago de Compostela, Spain.**
 
 ---
 
